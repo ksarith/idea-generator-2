@@ -15,6 +15,7 @@ const S = {
   boards: [], board: null, ideas: new Map(), edges: [], leads: [], spinoffs: [], judging: new Set(),
   autopilot: { state: 'manual' }, spentToday: 0, selected: null, templates: [], providers: null,
   settings: loadSettings(), stopFollow: null, createAt: null, leadsTab: 'x', refreshing: {}, exhibit: false,
+  cogito: { configured: false }, vettings: new Map(),
 };
 const fail = (e) => toast(errorText(e), 'error', 8000);
 /** Built-in template names are bilingual ("Uppfinnaren · Inventor"); show the half that matches the UI. */
@@ -152,6 +153,9 @@ function onEvent(e) {
       break;
     case 'project':
       toast(t('projectCreated', { p: e.path }), 'good', 9000);
+      break;
+    case 'vetting':
+      mergeVettings(e.vetting.ideaId, [e.vetting]);
       break;
     case 'spinoff':
       S.spinoffs.push({ ideaId: e.ideaId, boardId: e.boardId, title: e.title });
@@ -413,6 +417,7 @@ function renderIdea(idea) {
       h('button', { class: 'btn', onclick: () => rejudge(idea.id) }, t('rejudge')),
       h('button', { class: 'btn', title: t('announceHint'), onclick: () => announceDialog(idea) }, `📣 ${t('announce')}`),
       h('button', { class: 'btn', title: t('spinoffHint'), onclick: () => spinoff(idea) }, `⤴ ${t('spinoff')}`),
+      S.cogito.configured ? h('button', { class: 'btn', title: t('vetHint'), onclick: () => vetDialog(idea) }, `🔍 ${t('vet')}`) : null,
     ),
     h('div', { class: 'project' },
       idea.projectPath
@@ -815,6 +820,110 @@ function announceDialog(idea) {
   ]);
 }
 
+// ================================================================ cogito (optional)
+// Vetting is a record next to an idea, never a verdict on it: no pass/fail badge,
+// nothing here changes the jury's score. A person chooses which counter-proposals to seed.
+
+const vetUi = { ideaId: null, box: null };
+
+function mergeVettings(ideaId, rows) {
+  const byId = new Map((S.vettings.get(ideaId) ?? []).map((v) => [v.id, v]));
+  for (const v of rows) byId.set(v.id, v);
+  S.vettings.set(ideaId, [...byId.values()].sort((a, b) => b.id - a.id));
+  if (vetUi.box && vetUi.ideaId === ideaId) renderVetList();
+}
+
+async function vetDialog(idea) {
+  try {
+    S.cogito = await api('GET', '/api/cogito');
+    S.vettings.set(idea.id, (await api('GET', `/api/ideas/${idea.id}/vettings`)).vettings);
+  } catch (e) {
+    return fail(e);
+  }
+  const arm = h('select', {}, ['peer', 'strict', 'both'].map((a) => h('option', { value: a }, t(`vetArm_${a}`))));
+  const jury = h('input', { type: 'checkbox' });
+  const box = h('div', { class: 'vet-list' });
+  vetUi.ideaId = idea.id;
+  vetUi.box = box;
+  const dlg = dialog('dlg', t('vetTitle', { t: idea.title }), [
+    h('p', { class: 'small muted' }, t('vetHint')),
+    h('p', { class: 'small muted' }, t('vetBudget', { n: S.cogito.runsToday, max: S.cogito.maxRunsPerDay })),
+    field(t('vetArm'), arm),
+    h('label', { class: 'check' }, jury, t('vetShowJury')),
+    h('small', { class: 'muted' }, t('vetJuryNote')),
+    box,
+  ], [
+    h('button', { class: 'btn', value: 'cancel' }, t('close')),
+    h('button', {
+      class: 'btn primary',
+      onclick: async (e) => {
+        e.preventDefault();
+        try {
+          const r = await api('POST', `/api/ideas/${idea.id}/vet`, { arm: arm.value, showJury: jury.checked });
+          mergeVettings(idea.id, r.vettings);
+          S.cogito = await api('GET', '/api/cogito');
+        } catch (err) { fail(err); }
+      },
+    }, t('vetRun')),
+  ]);
+  dlg.addEventListener('close', () => { if (vetUi.box === box) vetUi.box = null; }, { once: true });
+  renderVetList();
+}
+
+function renderVetList() {
+  const rows = S.vettings.get(vetUi.ideaId) ?? [];
+  clear(vetUi.box, rows.length ? rows.map(vetRunView) : h('p', { class: 'muted small' }, t('vetNone')));
+}
+
+function vetRunView(v) {
+  const res = v.run?.result;
+  const head = h('div', { class: 'vet-head' },
+    h('strong', {}, t(`vetArm_${v.arm}`)), ' · ', t(`vetStatus_${v.status}`), ' · ', h('span', { class: 'muted small' }, v.createdAt));
+  if (v.status === 'running') return h('div', { class: 'vet-run' }, head, h('p', { class: 'muted' }, t('vetRunning')));
+
+  const refuser = res?.refused_seat ?? res?.refused_step;
+  const notes = res?.notes ?? [];
+  const seeded = v.run?.bridge_seeded ?? {};
+  const noteRow = (n) => h('div', { class: 'vet-note' },
+    h('div', { class: 'small' },
+      h('strong', {}, `${n.id} · ${t('vetNote_' + n.type.replace(/-/g, '_'))}`), ` ${t('vetFrom', { who: n.author })} · `,
+      h('span', { class: `vet-st ${n.status}` }, t('vetNoteStatus_' + n.status.replace(/ /g, '_')))),
+    h('div', { class: 'vet-text' }, n.text),
+    n.type === 'counter-proposal'
+      ? seeded[n.id]
+        ? h('span', { class: 'muted small' }, t('vetSeeded'))
+        : h('button', {
+            class: 'btn small',
+            onclick: async () => {
+              try {
+                const r = await api('POST', `/api/vettings/${v.id}/seed`, { noteId: n.id });
+                mergeVettings(v.ideaId, [r.vetting]);
+                toast(t('vetSeededToast'), 'good');
+              } catch (err) { fail(err); }
+            },
+          }, `🌱 ${t('vetSeed')}`)
+      : null);
+  const labels = res?.labels ?? [];
+  return h('div', { class: 'vet-run' }, head,
+    v.error ? h('p', { class: 'vet-err' }, v.error) : null,
+    res?.independence_warning ? h('p', { class: 'small vet-warn' }, res.independence_warning) : null,
+    refuser ? h('p', { class: 'vet-refusal' }, t('vetRefused', { who: refuser })) : null,
+    notes.length ? h('div', {}, h('div', { class: 'muted small' }, t('vetNotes')), notes.map(noteRow)) : null,
+    labels.length
+      ? h('div', {}, h('div', { class: 'muted small' }, t('vetLabels')),
+          labels.map((l) => h('div', { class: 'small' }, `${l.target}: ${l.label} · ${l.by}${l.accepted ? '' : ` · ✗ ${l.flag}`}`)))
+      : null,
+    (res?.seats ?? []).map((s) => h('details', { class: 'vet-seat' },
+      h('summary', {}, `${s.seat} · ${s.model}/${s.provider}${s.refusal ? ` · ${t('vetRefusal')}` : ''}`),
+      h('div', { class: 'vet-text' }, s.body),
+      s.flags?.length ? h('div', { class: 'muted small' }, s.flags.join(', ')) : null)),
+    (res?.steps ?? []).map((s) => h('details', { class: 'vet-seat' },
+      h('summary', {}, `${s.step} · ${s.role}${s.refusal ? ` · ${t('vetRefusal')}` : ''}`),
+      h('div', { class: 'vet-text' }, s.output))),
+    h('a', { class: 'small', href: `/api/vettings/${v.id}/run.json`, target: '_blank', rel: 'noopener noreferrer' }, `${t('vetRaw')} ↗`),
+  );
+}
+
 // ================================================================ exhibition
 
 function renderExhibit() {
@@ -940,6 +1049,7 @@ async function main() {
   } catch (e) {
     fail(e);
   }
+  S.cogito = await api('GET', '/api/cogito').catch(() => ({ configured: false }));
   await loadBoards();
   const last = Number(localStorage.getItem('ideagen.board'));
   const pick = S.boards.find((b) => b.id === last) ?? S.boards[0];
