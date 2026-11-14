@@ -5,7 +5,7 @@ Node 25 runs the TypeScript server directly; the frontend is vanilla ES modules.
 ## Commands
 
 - `npm start` – server on http://localhost:8300 (`PORT`, `HOST`, `DB_FILE` override)
-- `npm test` – 50 tests (`node --test`), fake LLM and fake provider servers, no network
+- `npm test` – 65 tests (`node --test`), fake LLM and fake provider servers, no network
 - `npm run calibrate [-- --model provider:model]` – real judge against weak and strong reference ideas. It costs money. **Re-run it whenever the judge's prompt, schema or model changes.**
 
 ## Layout
@@ -19,6 +19,7 @@ Node 25 runs the TypeScript server directly; the frontend is vanilla ES modules.
 - `server/autopilot.ts` – the scheduler and the pure `rateCheck()`.
 - `server/leads.ts` – the X and research scouts.
 - `server/project.ts` – Claude Code folders.
+- `server/cogito.ts` and `server/vetting.ts` – the optional CogitoEngine bridge: a child process (`python -m cogito.ideagen_bridge vet-one --stdin`), the run service, and the `vettings` table. Off unless `COGITO_DIR` is set.
 - `server/db.ts` – SQLite (`node:sqlite`), plus `report()` and `dashboard()` queries.
 - `server/app.ts` – HTTP, SSE (`/api/boards/:id/events`) and Markdown exports.
 - `public/js/score.js` and `public/js/evolve.js` – pure modules shared by the server, browser and tests.
@@ -37,6 +38,8 @@ Node 25 runs the TypeScript server directly; the frontend is vanilla ES modules.
 - **Dollar limits only see providers that report cost** (OpenRouter `usage.cost`, Anthropic via the price table). A limit of 0 means free models only.
 - **Text goes into the DOM as text nodes, never `innerHTML`** (`dom.js`). Ideas are written by models and by visitors.
 - **Project folders never overwrite.** They are created with a non-recursive `mkdir`, and a taken name gets `-2`.
+- **Cogito never writes fitness.** A vetting is a record next to an idea (`vettings` table, `COGITO_VETTING.md`); it never touches scores, medals, the jury or the autopilot. Counter-proposals become seeds only when a person picks one, and the board's own jury then judges them. No pass/fail badge: the UI shows flags and open questions only.
+- **Cogito's cost is invisible to the dollar budget** (its calls report no cost). The brake is `COGITO_MAX_RUNS_PER_DAY` (default 10, counted per arm, failed runs included). Browser-entered Anthropic/OpenAI keys go to the child's environment only. `COGITO_DIR`, `COGITO_PYTHON`, `COGITO_FLOW`, `COGITO_TIMEOUT_S`, and Cogito's own `COGITO_PROVIDER`/`COGITO_MODEL`/`MISTRAL_API_KEY` are read from the environment.
 
 ## Measured
 

@@ -33,6 +33,7 @@ Each board has a **goal** that every step works toward. Seed it with a thought, 
   - **Hosted:** OpenRouter, Anthropic (official SDK) and OpenAI.
   - **Copilot models:** neither GitHub Copilot nor Microsoft Copilot has a completion API for apps, and GitHub Models was retired on 30 July 2026. GitHub points to Microsoft Foundry, so the models behind both Copilots are reached through the Azure OpenAI / Microsoft Foundry provider.
   - **Local:** Ollama, MLX (`mlx_lm.server`), LM Studio, or any OpenAI-compatible URL.
+- **Vet with CogitoEngine (optional).** A button on the idea card runs the idea through [CogitoEngine](https://github.com/ksarith) (a separate Python project): several agents press on it, ask questions and propose alternatives. You get open questions, refusals and counter-proposals, never a grade; nothing changes the jury's score. You choose which counter-proposals become seeds. Off unless `COGITO_DIR` points at a CogitoEngine checkout; capped by `COGITO_MAX_RUNS_PER_DAY` because Cogito's cost is not in the dollar budget.
 - **Swedish and English** interface. Generated text follows the language of its seed.
 
 ## Run
@@ -42,11 +43,13 @@ Needs Node 25 or newer, which runs TypeScript directly. There is no build step.
 ```bash
 npm install          # one dependency: @anthropic-ai/sdk
 npm start            # http://localhost:8300
-npm test             # 50 tests, fake LLM, no network
+npm test             # 65 tests, fake LLM, no network
 npm run calibrate    # real judge vs. reference ideas (~$0.07); -- --model ollama:qwen3:8b for others
 ```
 
 All app settings live in the browser (localStorage), including API keys, models per role, provider addresses, the projects folder and the global budget. The browser pushes them to the local server, which keeps them in memory only and never writes keys to disk. Environment variables (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`) work as a fallback.
+
+Optional CogitoEngine vetting: `COGITO_DIR=/path/to/CogitoEngine npm start` (needs Python 3 with PyYAML and a Cogito provider key, e.g. `MISTRAL_API_KEY`; see its README). Browser-entered Anthropic and OpenAI keys are handed to Cogito's process environment only.
 
 The server listens on 127.0.0.1 only. There is no login, and keys pass through it, so **do not expose it** as is.
 
