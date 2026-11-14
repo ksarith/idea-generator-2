@@ -90,6 +90,20 @@ CREATE TABLE IF NOT EXISTS spend (
   calls INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (board_id, day)
 );
+-- Optional CogitoEngine vettings (server/vetting.ts). One row per arm run; the
+-- bridge's full run record is kept as JSON. Never read by the jury or the autopilot.
+CREATE TABLE IF NOT EXISTS vettings (
+  id INTEGER PRIMARY KEY,
+  idea_id INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+  arm TEXT NOT NULL CHECK (arm IN ('peer', 'strict')),
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'refused', 'aborted', 'failed')),
+  run TEXT,
+  error TEXT,
+  day TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS vettings_idea ON vettings(idea_id);
 `;
 
 // Templates for a board's creation flow. The prompts are in English; the
@@ -263,6 +277,23 @@ export type Lead = {
 const IDEA_SELECT = `SELECT i.*, ob.title AS origin_board_title,
   (SELECT group_concat(keyword, '|') FROM (SELECT keyword FROM idea_keywords k WHERE k.idea_id = i.id ORDER BY keyword)) AS keywords
   FROM ideas i LEFT JOIN boards ob ON ob.id = i.origin_board_id`;
+
+export type Vetting = {
+  id: number;
+  ideaId: number;
+  arm: 'peer' | 'strict';
+  status: 'running' | 'completed' | 'refused' | 'aborted' | 'failed';
+  /** The bridge's full run record (provenance, prompts, notes), or null while running. */
+  run: any | null;
+  error: string | null;
+  day: string;
+  createdAt: string;
+  finishedAt: string | null;
+};
+const vettingFromRow = (r: any): Vetting => ({
+  id: r.id, ideaId: r.idea_id, arm: r.arm, status: r.status, run: r.run ? JSON.parse(r.run) : null,
+  error: r.error, day: r.day, createdAt: r.created_at, finishedAt: r.finished_at,
+});
 
 const ideaFromRow = (r: any): Idea => ({
   id: r.id,
@@ -725,6 +756,44 @@ export function openDb(file: string) {
     spentTotal(): { usd: number; calls: number } {
       const r: any = db.prepare('SELECT SUM(usd) AS usd, SUM(calls) AS calls FROM spend').get();
       return { usd: r?.usd ?? 0, calls: r?.calls ?? 0 };
+    },
+
+    // ---- Cogito vettings (optional)
+    insertVetting(v: { ideaId: number; arm: Vetting['arm']; day: string }): Vetting {
+      const { lastInsertRowid } = db
+        .prepare(`INSERT INTO vettings (idea_id, arm, status, day) VALUES (?, ?, 'running', ?)`)
+        .run(v.ideaId, v.arm, v.day);
+      return repo.getVetting(Number(lastInsertRowid))!;
+    },
+    getVetting(id: number): Vetting | null {
+      const r = db.prepare('SELECT * FROM vettings WHERE id = ?').get(id);
+      return r ? vettingFromRow(r) : null;
+    },
+    listVettings(ideaId: number): Vetting[] {
+      return db.prepare('SELECT * FROM vettings WHERE idea_id = ? ORDER BY id DESC').all(ideaId).map(vettingFromRow);
+    },
+    finishVetting(id: number, f: { status: Exclude<Vetting['status'], 'running'>; run?: unknown; error?: string | null }): Vetting | null {
+      db.prepare(`UPDATE vettings SET status = ?, run = ?, error = ?, finished_at = datetime('now') WHERE id = ?`)
+        .run(f.status, f.run == null ? null : JSON.stringify(f.run), f.error ?? null, id);
+      return repo.getVetting(id);
+    },
+    setVettingRun(id: number, run: unknown): Vetting | null {
+      db.prepare('UPDATE vettings SET run = ? WHERE id = ?').run(JSON.stringify(run), id);
+      return repo.getVetting(id);
+    },
+    hasRunningVetting(ideaId: number): boolean {
+      return !!db.prepare(`SELECT 1 FROM vettings WHERE idea_id = ? AND status = 'running' LIMIT 1`).get(ideaId);
+    },
+    /** Runs started on a local calendar day (the Cogito daily cap counts these, failed ones included). */
+    vettingsOn(day: string): number {
+      return (db.prepare('SELECT COUNT(*) AS n FROM vettings WHERE day = ?').get(day) as any).n;
+    },
+    /** After a restart nothing is really running: close what the dead process left open. */
+    failRunningVettings(reason: string): number {
+      const r = db
+        .prepare(`UPDATE vettings SET status = 'failed', error = ?, finished_at = datetime('now') WHERE status = 'running'`)
+        .run(reason);
+      return Number(r.changes);
     },
   };
   return repo;

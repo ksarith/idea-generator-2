@@ -8,6 +8,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import type { Repo, Idea, Board } from './db.ts';
 import { AppError, type Engine } from './engine.ts';
 import type { Autopilot } from './autopilot.ts';
+import type { VettingService } from './vetting.ts';
 import { PROVIDERS, keySource, listModels, mergeAppSettings, type AppSettings, type ProviderId } from './providers.ts';
 import { fitness, medal, scoreSum } from '../public/js/score.js';
 
@@ -18,7 +19,7 @@ export type Runtime = {
   received(): boolean;
 };
 
-type Deps = { repo: Repo; engine: Engine; autopilot: Autopilot; runtime: Runtime; publicDir: string };
+type Deps = { repo: Repo; engine: Engine; autopilot: Autopilot; runtime: Runtime; publicDir: string; vetting?: VettingService };
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -162,8 +163,12 @@ export function reportMarkdown(r: ReturnType<Repo['report']>, lang: 'sv' | 'en')
   return out.join('\n');
 }
 
-export function createHandler({ repo, engine, autopilot, runtime, publicDir }: Deps) {
+export function createHandler({ repo, engine, autopilot, runtime, publicDir, vetting }: Deps) {
   const root = resolve(publicDir);
+  const cogito = () => {
+    if (!vetting) throw new AppError(501, 'cogito_off', 'CogitoEngine is not configured (set COGITO_DIR to its folder, then restart)');
+    return vetting;
+  };
 
   function providerStatus() {
     const s = runtime.get();
@@ -249,6 +254,12 @@ export function createHandler({ repo, engine, autopilot, runtime, publicDir }: D
 
     // ---- ideas
     ['POST', /^\/api\/boards\/(\d+)\/seed$/, ([id], b) => engine.seed(+id, b)],
+    // ---- CogitoEngine (optional; needs COGITO_DIR, see CLAUDE.md)
+    ['GET', /^\/api\/cogito$/, () => vetting?.status() ?? { configured: false, runsToday: 0, maxRunsPerDay: 0 }],
+    ['GET', /^\/api\/ideas\/(\d+)\/vettings$/, ([id]) => ({ vettings: cogito().list(+id) })],
+    ['POST', /^\/api\/ideas\/(\d+)\/vet$/, ([id], b) => cogito().start(+id, b)],
+    ['POST', /^\/api\/vettings\/(\d+)\/seed$/, ([id], b) => cogito().seedNote(+id, b?.noteId)],
+    ['GET', /^\/api\/vettings\/(\d+)\/run\.json$/, ([id]) => ({ __raw: cogito().fullRun(+id), type: 'application/json; charset=utf-8' })],
     ['POST', /^\/api\/ideas\/(\d+)\/expand$/, ([id]) => engine.expand(+id)],
     ['POST', /^\/api\/boards\/(\d+)\/combine$/, ([id], b) => engine.combine(+id, b.a, b.b)],
     ['POST', /^\/api\/ideas\/(\d+)\/judge$/, ([id]) => engine.judge(+id)],

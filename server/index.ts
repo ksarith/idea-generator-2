@@ -7,6 +7,8 @@ import { DEFAULT_APP_SETTINGS, makeChat, type AppSettings } from './providers.ts
 import { createEngine } from './engine.ts';
 import { createAutopilot } from './autopilot.ts';
 import { createHandler, type Runtime } from './app.ts';
+import { cogitoFromEnv } from './cogito.ts';
+import { createVetting } from './vetting.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT ?? 8300);
@@ -31,9 +33,12 @@ const runtime: Runtime = {
 
 const engine = createEngine({ repo, chat: makeChat(runtime.get), settings: runtime.get });
 const autopilot = createAutopilot({ repo, engine, settings: runtime.get }).start();
+// Optional: vet ideas with CogitoEngine. Off unless COGITO_DIR is set (see CLAUDE.md).
+const vetting = createVetting({ repo, engine, cogito: cogitoFromEnv(runtime.get) });
 
-createServer(createHandler({ repo, engine, autopilot, runtime, publicDir: join(root, 'public') })).listen(PORT, HOST, () => {
+createServer(createHandler({ repo, engine, autopilot, runtime, vetting, publicDir: join(root, 'public') })).listen(PORT, HOST, () => {
   console.log(`Idégeneratorn: http://localhost:${PORT}`);
+  if (vetting.status().configured) console.log(`CogitoEngine vetting on (max ${vetting.status().maxRunsPerDay} runs/day; its cost is not in the dollar budget).`);
   const auto = repo.listBoards().filter((b) => b.config.mode === 'auto');
   if (auto.length) console.log(`Autopilot on for ${auto.length} board(s); they need keys from the browser or the environment.`);
 });
