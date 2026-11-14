@@ -281,3 +281,14 @@ body.exhibit #seed-input { font-size: 20px; padding: 18px 22px; }
   .bar-right .btn.ghost { padding: 6px 8px; }
   .dash-body { grid-template-columns: 1fr; }
 }
+
+/* Cogito vetting dialog (optional feature) */
+.vet-list { margin-top: 12px; display: grid; gap: 12px; }
+.vet-run { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.vet-head { margin-bottom: 6px; }
+.vet-warn { color: var(--muted); }
+.vet-err, .vet-refusal { color: var(--danger); }
+.vet-note { border-top: 1px solid var(--line); padding: 6px 0; }
+.vet-st.open, .vet-st.unresolved { color: var(--danger); }
+.vet-text { white-space: pre-wrap; margin: 4px 0 6px; }
+.vet-seat summary { cursor: pointer; margin-top: 6px; }
